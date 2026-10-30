@@ -1,83 +1,70 @@
 package org.ies.tierno.library.service;
 
+import org.ies.tierno.library.model.Book;
+import org.ies.tierno.library.repository.BookRepository;
 import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
 
 @Service
 public class BookService {
 
-    private final Map<Long, Book> books = new ConcurrentHashMap<>();
-    private final AtomicLong nextId = new AtomicLong(1);
+    // No book has id 0: ids start at 1.
+    private static final long NO_ID = 0;
 
-    public BookService() {
-        create(new BookRequest("9788420412146", "Don Quijote de la Mancha", "Miguel de Cervantes", 1605, 1376));
-        create(new BookRequest("9788437604596", "La Regenta", "Leopoldo Alas Clarín", 1884, 1040));
-        create(new BookRequest("9788420665245", "Novelas ejemplares", "Miguel de Cervantes", 1613, 640));
+    private final BookRepository repository;
+
+    public BookService(BookRepository repository) {
+        this.repository = repository;
     }
 
-    /**
-     * Devuelve los libros cuyo autor y título contienen los textos indicados,
-     * sin distinguir mayúsculas. Un filtro null no se aplica.
-     */
-    public List<Book> search(String author, String title) {
-        return books.values().stream()
-                .filter(book -> author == null || containsIgnoreCase(book.author(), author))
-                .filter(book -> title == null || containsIgnoreCase(book.title(), title))
-                .sorted(Comparator.comparing(Book::id))
+    public List<Book> findAll(String author) {
+        List<Book> all = repository.findAll();
+        if (author == null) {
+            return all;
+        }
+        return all.stream()
+                .filter(book -> book.author().equalsIgnoreCase(author))
                 .toList();
     }
 
-    public Optional<Book> findById(long id) {
-        return Optional.ofNullable(books.get(id));
+    public Book findById(long id) {
+        return repository.findById(id)
+                .orElseThrow(() -> new BookNotFoundException(id));
     }
 
-    /**
-     * @throws DuplicateIsbnException si ya existe un libro con ese ISBN
-     */
-    public synchronized Book create(BookRequest request) {
-        if (isbnInUse(request.isbn(), null)) {
-            throw new DuplicateIsbnException(request.isbn());
-        }
-        long id = nextId.getAndIncrement();
-        Book book = toBook(id, request);
-        books.put(id, book);
+    public Book create(String isbn, String title, String author,
+                       int year, BigDecimal purchasePrice) {
+        checkIsbnIsAvailable(isbn, NO_ID);
+        Book book = new Book(repository.nextId(), isbn, title, author,
+                year, purchasePrice, LocalDate.now());
+        repository.save(book);
         return book;
     }
 
-    /**
-     * Devuelve Optional.empty() si el libro no existe.
-     *
-     * @throws DuplicateIsbnException si el ISBN pertenece a otro libro
-     */
-    public synchronized Optional<Book> update(long id, BookRequest request) {
-        if (!books.containsKey(id)) {
-            return Optional.empty();
+    public Book replace(long id, String isbn, String title, String author,
+                        int year, BigDecimal purchasePrice) {
+        Book current = findById(id);
+        checkIsbnIsAvailable(isbn, id);
+        Book book = new Book(id, isbn, title, author,
+                year, purchasePrice, current.registrationDate());
+        repository.save(book);
+        return book;
+    }
+
+    public void delete(long id) {
+        if (!repository.deleteById(id)) {
+            throw new BookNotFoundException(id);
         }
-        if (isbnInUse(request.isbn(), id)) {
-            throw new DuplicateIsbnException(request.isbn());
+    }
+
+    private void checkIsbnIsAvailable(String isbn, long ignoredId) {
+        boolean duplicate = repository.findAll().stream()
+                .anyMatch(b -> b.id() != ignoredId && b.isbn().equals(isbn));
+        if (duplicate) {
+            throw new DuplicateIsbnException(isbn);
         }
-        Book book = toBook(id, request);
-        books.put(id, book);
-        return Optional.of(book);
-    }
-
-    /**
-     * Devuelve true si el libro existía y se ha eliminado.
-     */
-    public synchronized boolean delete(long id) {
-        return books.remove(id) != null;
-    }
-
-    private boolean isbnInUse(String isbn, Long excludedId) {
-        return books.values().stream()
-                .anyMatch(book -> book.isbn().equals(isbn) && !book.id().equals(excludedId));
-    }
-
-    private static Book toBook(long id, BookRequest request) {
-        return new Book(id, request.isbn(), request.title(), request.author(),
-                request.publicationYear(), request.pages());
-    }
-
-    private static boolean containsIgnoreCase(String text, String fragment) {
-        return text.toLowerCase().contains(fragment.toLowerCase());
     }
 }

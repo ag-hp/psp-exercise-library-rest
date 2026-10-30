@@ -1,4 +1,6 @@
 package org.ies.tierno.library.model;
 
-public record Book(Long id, String isbn, String title, String author, int publicationYear, int pages) {
+import java.math.BigDecimal;
+
+public record Book(int id, String isbn, String title, String author, int year, BigDecimal purchasePrice) {
 }
